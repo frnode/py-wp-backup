@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # coding: utf-8
 
 # py-wp-backup
@@ -19,17 +19,16 @@
 
 from setuptools import setup, find_packages
 
-from py_wp_backup import py_wp_backup_old
-
 setup(
     name='py-wp-backup',
-    version=py_wp_backup_old.__version__,
+    version='0.1.0',
+    python_requires='>=3.7',
     packages=find_packages(),
     author="frnode",
     author_email="gp.corentin@gmail.com",
     description="Secure Wordpress backup.",
     long_description=open('README.md').read(),
-    # install_requires= ,
+    install_requires=['click', 'python-gnupg', 'wpconfigr', 'regex'],
     include_package_data=True,
     url='http://github.com/frnode/py-wp-backup',
 
@@ -45,9 +44,10 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'wp-backup = py_wp_backup.py_wp_backup:cli',
+            'wp-backup=py_wp_backup.py_wp_backup:main',
         ],
     },
-    license="GPL3", install_requires=['click', 'python-gnupg']
+    license="GPL3",
+
 
 )
