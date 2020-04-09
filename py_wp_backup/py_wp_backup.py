@@ -199,27 +199,27 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
         # define file name
         WP_FILENAME_PREFIX = "WP_BACKUP_"
         WP_FILENAME = WP_FILENAME_PREFIX + str(datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
-        WP_TMP_FILENAME = "TMP_" + WP_FILENAME
-        WP_TMP_FILENAME_EXT = WP_TMP_FILENAME + ".tar.gz"
-        WP_FILENAME_EXT = WP_FILENAME + ".encrypted" + ".tar.gz"
-        WP_TMP_PATH_FILENAME = os.path.join(archive_dir, WP_TMP_FILENAME_EXT)
-        WP_FINAL_PATH_FILENAME = os.path.join(archive_dir, WP_FILENAME_EXT)
+        WP_UNCRYPTED_FILENAME = WP_FILENAME
+        WP_UNCRYPTED_FILENAME_EXT = WP_UNCRYPTED_FILENAME + ".tar.gz"
+        WP_CRYPTED_FILENAME_EXT = WP_FILENAME + ".encrypted" + ".tar.gz"
+        WP_UNCRYPTED_PATH_FILENAME = os.path.join(archive_dir, WP_UNCRYPTED_FILENAME_EXT)
+        WP_CRYPTED_PATH_FILENAME = os.path.join(archive_dir, WP_CRYPTED_FILENAME_EXT)
 
         if ctx.obj['gpg_use']:
-            wp_backup_filename = WP_FILENAME_EXT
-            wp_backup_file_path = WP_FINAL_PATH_FILENAME
+            wp_backup_filename = WP_CRYPTED_FILENAME_EXT
+            wp_backup_file_path = WP_CRYPTED_PATH_FILENAME
         else:
-            wp_backup_filename = WP_TMP_FILENAME_EXT
-            wp_backup_file_path = WP_TMP_PATH_FILENAME
+            wp_backup_filename = WP_UNCRYPTED_FILENAME_EXT
+            wp_backup_file_path = WP_UNCRYPTED_PATH_FILENAME
 
         # gzip
-        wp_backup_file = tar([wp_dir], WP_TMP_PATH_FILENAME)
+        wp_backup_file = tar([wp_dir], WP_UNCRYPTED_PATH_FILENAME)
 
         # encrypt
         if ctx.obj['gpg_use']:
             encrypt_with_gpg(ctx.obj['gpg'], wp_backup_file, key=ctx.obj['gpg_key_id'],
                              remove_file=True,
-                             output_path=WP_FINAL_PATH_FILENAME)
+                             output_path=WP_CRYPTED_PATH_FILENAME)
 
         # transfer
         if ctx.obj['transfer_use']:
@@ -233,19 +233,19 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
         # define file name
         SQL_FILENAME_PREFIX = "SQL_BACKUP_"
         SQL_FILENAME = SQL_FILENAME_PREFIX + str(datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
-        SQL_TMP_FILENAME = "TMP_" + SQL_FILENAME
-        SQL_TMP_FILENAME_EXT = SQL_TMP_FILENAME + ".tar.gz"
-        SQL_FILENAME_EXT = SQL_FILENAME + ".encrypted" + ".tar.gz"
+        SQL_UNCRYPTED_FILENAME = SQL_FILENAME
+        SQL_UNCRYPTED_FILENAME_EXT = SQL_UNCRYPTED_FILENAME + ".tar.gz"
+        SQL_CRYPTED_FILENAME_EXT = SQL_FILENAME + ".encrypted" + ".tar.gz"
         SQL_PATH_FILENAME = os.path.join(archive_dir, SQL_FILENAME + '.sql')
-        SQL_TMP_PATH_FILENAME = os.path.join(archive_dir, SQL_TMP_FILENAME_EXT)
-        SQL_FINAL_PATH_FILENAME = os.path.join(archive_dir, SQL_FILENAME_EXT)
+        SQL_UNCRYPTED_PATH_FILENAME = os.path.join(archive_dir, SQL_UNCRYPTED_FILENAME_EXT)
+        SQL_CRYPTED_PATH_FILENAME = os.path.join(archive_dir, SQL_CRYPTED_FILENAME_EXT)
 
         if ctx.obj['gpg_use']:
-            sql_backup_filename = SQL_FILENAME_EXT
-            sql_backup_file_path = SQL_FINAL_PATH_FILENAME
+            sql_backup_filename = SQL_CRYPTED_FILENAME_EXT
+            sql_backup_file_path = SQL_CRYPTED_PATH_FILENAME
         else:
-            sql_backup_filename = SQL_TMP_FILENAME_EXT
-            sql_backup_file_path = SQL_TMP_PATH_FILENAME
+            sql_backup_filename = SQL_UNCRYPTED_FILENAME_EXT
+            sql_backup_file_path = SQL_UNCRYPTED_PATH_FILENAME
 
         # get wp-config params
         wp_config = WpConfigFile(os.path.join(wp_dir, 'wp-config.php'))
@@ -261,13 +261,13 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
                    mysql_pw=wp_config.get('DB_PASSWORD'), database=wp_config.get('DB_NAME'), out_file=SQL_PATH_FILENAME)
 
         # gzip
-        sql_backup_file = tar([SQL_PATH_FILENAME], SQL_TMP_PATH_FILENAME)
+        sql_backup_file = tar([SQL_PATH_FILENAME], SQL_UNCRYPTED_PATH_FILENAME)
 
         # encrypt
         if ctx.obj['gpg_use']:
             encrypt_with_gpg(ctx.obj['gpg'], sql_backup_file, key=ctx.obj['gpg_key_id'],
                              remove_file=True,
-                             output_path=SQL_FINAL_PATH_FILENAME)
+                             output_path=SQL_CRYPTED_PATH_FILENAME)
 
         # transfer
         if ctx.obj['transfer_use']:
@@ -275,7 +275,6 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
                               ctx.obj['transfer_timeout'], ctx.obj['transfer_ftps'], close_immediately=False)
             ftp_transfer_file(ftp, sql_backup_filename, sql_backup_file_path,
                               remove_local_file=ctx.obj['transfer_remove_local'], close=True)
-
 
 
 def tar(src, out, mode='x:gz'):
@@ -389,9 +388,10 @@ def sql_backup(hostname, port, mysql_user, mysql_pw, database, out_file):
         # Check for errors
         if p.returncode != 0:
             raise
-        print("Backup done for", hostname)
+        click.echo('SQL backup performed successfully. Database: ' + database)
     except:
-        print("Backup failed for", hostname)
+        click.echo('Error during SQL Backup. Database: ' + database)
+        exit(2)
 
 
 def parse_hostport(hp):
@@ -422,6 +422,7 @@ def parse_hostport(hp):
     except TypeError:
         # port is None
         return (addr, None)
+
 
 def main():
     cli(obj={})
