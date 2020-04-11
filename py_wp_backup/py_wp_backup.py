@@ -190,9 +190,9 @@ def gpg(ctx, key_server, key_id, key_file, private_key_file, private_key_file_re
 @click.option('--remove-local', '-rml', type=bool, default=False, required=True)
 @click.pass_context
 def transfer(ctx, host, user, passwd, timeout, mode, remove_local):
-    # if not ctx.obj['backup_use']:
-    #    click.echo('To use this command, the "backup" command is required.', err=True)
-    #    exit(2)
+    #if not ctx.obj['backup_use']:
+    #   click.echo('To use this command, the "backup" command is required.', err=True)
+    #   exit(2)
 
     ctx.obj['transfer_use'] = True
 
@@ -210,11 +210,27 @@ def transfer(ctx, host, user, passwd, timeout, mode, remove_local):
     ctx.obj['transfer_remove_local'] = remove_local
 
 
+def check_old_backup(file, days):
+    # clean name
+    filename_clean = os.path.basename(file.replace('.tar.gz', '').replace('.encrypted', '').replace('SQL_BACKUP_', '').
+                                      replace('WP_BACKUP_', ''))
+    date_format = '%Y-%m-%d-%H-%M-%S'
+    date_now = datetime.datetime.now().strftime(date_format)
+    a = datetime.datetime.strptime(filename_clean, date_format)
+    b = datetime.datetime.strptime(date_now, date_format)
+    delta = b - a
+
+    if delta.days >= days:
+        return True
+    else:
+        return False
+
+
 @cli.command()
 @click.option('--wp', '-w', type=bool, default=True, required=True)
 @click.option('--sql', '-s', type=bool, default=True, required=True)
 @click.option('--wp-dir', '-wd', type=click.Path(exists=True, readable=True, dir_okay=True), default='', required=True)
-@click.option('--archive-dir', '-a', type=click.Path(exists=True, writable=True, dir_okay=True), default='',
+@click.option('--archive-dir', '-ad', type=click.Path(exists=True, writable=True, dir_okay=True), default='',
               required=True)
 @click.pass_context
 def backup(ctx, wp, sql, wp_dir, archive_dir):
@@ -224,6 +240,33 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
         click.echo('Please know at least one command for backup: "--wp" or "--sql" to use the backup command.')
 
     click.echo('Backup archive directory: ' + archive_dir)
+    click.echo('Backup verification greater than ' + str(ctx.obj['archive-retention']) + ' day(s)')
+
+    files = []
+    if ctx.obj['transfer_use']:
+        ftp = ftp_connect(ctx.obj['transfer_host'], ctx.obj['transfer_user'], ctx.obj['transfer_passwd'],
+                          ctx.obj['transfer_timeout'], ctx.obj['transfer_ftps'], close_immediately=False)
+        files = []
+
+        try:
+            files = ftp.nlst()
+        except ftplib.error_perm as resp:
+            click.echo('Files not found', err=True)
+            exit(2)
+
+        for f in files:
+            if f.endswith('.tar.gz'):
+                old_or_not = check_old_backup(f, ctx.obj['archive-retention'])
+                if old_or_not:
+                    ftp.delete(f)
+                    click.echo('Remote backup deleted: "' + f + '"')
+
+    for file in os.listdir(archive_dir):
+        if file.endswith(".tar.gz"):
+            old_or_not = check_old_backup(file, ctx.obj['archive-retention'])
+            if old_or_not:
+                os.remove(os.path.join(archive_dir, file))
+                click.echo('Local backup deleted: "' + file + '"')
 
     if wp:
         click.echo('WordPress backup launch...')
@@ -296,6 +339,9 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
         # gzip
         sql_backup_file = tar([SQL_PATH_FILENAME], SQL_UNCRYPTED_PATH_FILENAME, accname=SQL_UNCRYPTED_FILENAME + '.sql')
 
+        # delete not compressed file
+        remove(SQL_PATH_FILENAME)
+
         # encrypt
         if ctx.obj['gpg_use']:
             encrypt_with_gpg(ctx.obj['gpg'], sql_backup_file, key=ctx.obj['gpg_key_id'],
@@ -311,9 +357,7 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
 
 
 @cli.command()
-@click.option('--wp-archive', '-wa', default=None, type=click.Path(exists=True, writable=False, file_okay=True),
-              cls=Mutex,
-              not_required_if=['wp_dir'])
+@click.option('--wp-archive', '-wa', default=None, type=click.Path(exists=True, writable=False, file_okay=True))
 @click.option('--sql-archive', '-sa', default=None, type=click.Path(exists=True, writable=False, file_okay=True))
 @click.option('--wp-dir', '-wd', default=None, required=True)
 @click.option('--sql-database', '-sd', default=None)
@@ -417,7 +461,6 @@ def restore(ctx, wp_archive, sql_archive, wp_dir, sql_database):
             click.echo('Temporary directory created: "' + sql_tmp_dir_file.name + '"')
 
         sql_tmp_file = os.path.basename(sql_archive.replace('.encrypted.tar.gz', ''))
-
         sql_file = os.path.join(sql_tmp_dir_file.name, sql_tmp_file) + '.sql'
 
         tar_decompress(sql_compress_path_file, sql_tmp_dir_file.name)
@@ -442,9 +485,9 @@ def restore(ctx, wp_archive, sql_archive, wp_dir, sql_database):
             wp_db_name = sql_database
 
         sql_restore(hostname=wp_db_host, port=wp_db_port, mysql_user=wp_config.get('DB_USER'),
-                   mysql_pw=wp_config.get('DB_PASSWORD'), database=wp_db_name, file=sql_file)
+                    mysql_pw=wp_config.get('DB_PASSWORD'), database=wp_db_name, file=sql_file)
 
-        #sql_tmp_file.close()
+        remove(sql_tmp_dir_file.name)
 
 
 def tar(src, out, mode='x:gz', accname=None):
