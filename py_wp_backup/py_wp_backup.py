@@ -99,25 +99,11 @@ def cli(ctx, archive_retention):
 
     required_transfer_cmd = 'transfer'
     required_backup_cmd = 'backup'
-    # required_wp_cmd_backup = ['--wp', '--sql']
-    # required_wp_cmd_options = ['--wp-dir', '-wd', '--archive-dir', '-a']
-    #
-    sys_argv_set = set(sys.argv)
-    # required_wp_cmd_options_set = set(required_wp_cmd_options)
-    # required_wp_cmd_backup_set = set(required_wp_cmd_backup)
+
     if (required_transfer_cmd in sys.argv) and (required_backup_cmd not in sys.argv):
         click.echo('To use this command, the "backup" command is required and must be positioned before "transfer".',
                    err=True)
         exit(1)
-
-    # if (len(sys_argv_set.intersection(required_wp_cmd_backup_set)) > 0) and (required_wp_cmd in sys.argv) \
-    #        and (len(sys_argv_set.intersection(required_wp_cmd_options_set)) == 2):
-    #    ctx.obj['backup_use'] = True
-    # else:
-    #    click.echo('The "' + required_wp_cmd + '" command is required and options: ' +
-    #               ', '.join(required_wp_cmd_options) + ' and and at least one: ' + ', '.join(required_wp_cmd_backup),
-    #               err=True)
-    #    exit(2)
 
 
 @cli.command()
