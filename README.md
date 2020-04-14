@@ -30,7 +30,7 @@ wp-backup subcommand --help
 ## Example
 Create a backup with the site and the database, locally.
 ```bash
-wp-backup --archive-retention "NUMBER OF DAYS TO KEEP BACKUPS" backup --wp 1 --sql 1 --wp-dir "WORDPRESS SITE PATH" --archive-dir PATH WHERE BACKUPS ARE STORED"
+wp-backup --archive-retention "NUMBER OF DAYS TO KEEP BACKUPS" backup --wp 1 --sql 1 --wp-dir "WORDPRESS SITE PATH" --archive-dir "PATH WHERE BACKUPS ARE STORED"
 ```
 
 Create a backup with the site and the database, locally with a copy on FTP server.
