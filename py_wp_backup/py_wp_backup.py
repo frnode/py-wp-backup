@@ -25,15 +25,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from pprint import pprint
-
+import click
 import gnupg as gnupg_
-import regex as regex
 from wpconfigr import WpConfigFile
 
-import click
 
-
+# Class allowing to have several requirements in the "click" options.
 class Mutex(click.Option):
     def __init__(self, *args, **kwargs):
         self.not_required_if = kwargs.pop("not_required_if")
@@ -56,11 +53,13 @@ class Mutex(click.Option):
         return super(Mutex, self).handle_parse_result(ctx, opts, args)
 
 
+# Used by fixFTP_TLS
 class ReusedSslSocket(ssl.SSLSocket):
     def unwrap(self):
         pass
 
 
+# Fixed an issue in the "FTP_TLS" class allowing the use of FTPS.
 class fixFTP_TLS(ftplib.FTP_TLS):
     """Explicit FTPS, with shared TLS session"""
 
@@ -74,11 +73,12 @@ class fixFTP_TLS(ftplib.FTP_TLS):
         return conn, size
 
 
+# Called when the program starts, this part allows you to configure the backup retention time.
 @click.group(chain=True)
-@click.option('--debug/--no-debug', default=False)
-@click.option('--archive-retention', '-ar', type=int, default=7)
+@click.option('--archive-retention', '-ar', type=int, default=7, help='Number in days during which the backup made is '
+                                                                      'kept.')
 @click.pass_context
-def cli(ctx, debug, archive_retention):
+def cli(ctx, archive_retention):
     click.clear()
     click.echo("                       _                _                \n"
                " __      ___ __       | |__   __ _  ___| | ___   _ _ __  \n"
@@ -87,23 +87,29 @@ def cli(ctx, debug, archive_retention):
                "   \_/\_/ | .__/      |_.__/ \__,_|\___|_|\_\\__,_| .___/\n"
                "          |_|                                     |_|    \n")
 
-    click.echo('Debug mode is %s' % ('on' if debug else 'off'))
     click.echo('Retention of backups for ' + str(archive_retention) + ' days')
-    ctx.obj['archive-retention'] = archive_retention
+    ctx.obj['archive_retention'] = archive_retention
+    # No command has been used yet. If used this value will change to "True".
+    # The "ctx" values allow you to share the values​between the different commands.
     ctx.obj['gpg_use'] = False
     ctx.obj['gpg_private_use'] = False
     ctx.obj['transfer_use'] = False
     ctx.obj['backup_use'] = False
     ctx.obj['restore_use'] = False
 
-    # required_wp_cmd = 'backup'
+    required_transfer_cmd = 'transfer'
+    required_backup_cmd = 'backup'
     # required_wp_cmd_backup = ['--wp', '--sql']
     # required_wp_cmd_options = ['--wp-dir', '-wd', '--archive-dir', '-a']
     #
-    # sys_argv_set = set(sys.argv)
+    sys_argv_set = set(sys.argv)
     # required_wp_cmd_options_set = set(required_wp_cmd_options)
     # required_wp_cmd_backup_set = set(required_wp_cmd_backup)
-    #
+    if (required_transfer_cmd in sys.argv) and (required_backup_cmd not in sys.argv):
+        click.echo('To use this command, the "backup" command is required and must be positioned before "transfer".',
+                   err=True)
+        exit(1)
+
     # if (len(sys_argv_set.intersection(required_wp_cmd_backup_set)) > 0) and (required_wp_cmd in sys.argv) \
     #        and (len(sys_argv_set.intersection(required_wp_cmd_options_set)) == 2):
     #    ctx.obj['backup_use'] = True
@@ -115,57 +121,77 @@ def cli(ctx, debug, archive_retention):
 
 
 @cli.command()
-@click.option('--key-file', '-kf', default=None, cls=Mutex, not_required_if=['key_server', 'key_id'])
-@click.option('--key-server', '-ks', type=str, default='keyserver.ubuntu.com')
-@click.option('--key-id', '-ki', type=str, default=None, cls=Mutex,
-              not_required_if=['private_key_file', 'private_key_file_remove'])
+@click.option('--key-file', '-kf', type=click.Path(exists=True, readable=True, file_okay=True), default=None,
+              help='File containing the GPG public key. Allows you to use the program without searching on a public '
+                   'server.')
+@click.option('--key-id', '-ki', type=str, default=None, help='ID of the key to import from the server.')
+@click.option('--key-server', '-ks', type=str, default='keyserver.ubuntu.com', show_default=True,
+              help='Server where the request is made to retrieve the public key.')
 @click.option('--private-key-file', '-pkf', type=click.Path(exists=True, readable=True, file_okay=True),
-              default=None, cls=Mutex, not_required_if=['key_server', 'key_id', 'key_file'])
-@click.option('--private-key-pass', '-pkp', cls=Mutex,
-              not_required_if=['key_server', 'key_id', 'key_file'], prompt=True, hide_input=True)
-@click.option('--private-key-file-remove', '-pkf', default=True, required=False, cls=Mutex,
-              not_required_if=['key_server', 'key_id', 'key_file'])
+              default=None, help='When restoring if your backup is encrypted, this option must be specified in order '
+                                 'to decrypt the backup. This option retrieves the private key and imports it.')
+@click.option('--private-key-pass', '-pkp', required=False, hide_input=True, help='Secret phrase to import the private '
+                                                                                  'key. For security reasons, '
+                                                                                  'it is recommended not to define it, '
+                                                                                  'it will be requested in a secure '
+                                                                                  'manner at the time of execution.')
+@click.option('--private-key-file-remove', '-pkf', default=True, help='Once the backup is restored you can delete the '
+                                                                      'private key from GPG. If you use this option, '
+                                                                      'please also delete your file containing the '
+                                                                      'private key in your own secure manner.')
 @click.pass_context
 def gpg(ctx, key_server, key_id, key_file, private_key_file, private_key_file_remove, private_key_pass):
-    # Todo: Need cleanup, use try ?
-    # if not (ctx.obj['backup_use'] or ctx.obj['restore_use']):
-    #    click.echo('To use this command, the "backup" or "restore" command is required.', err=True)
-    #    exit(2)
-
+    # The gpg command is used.
     ctx.obj['gpg_use'] = True
+    key_fingerprint = None
+
     click.echo("GPG initialization...")
+
+    # Initializing GPG
     gpg = gnupg_.GPG()
 
-    # export
+    # Export of GPG to be able to use it in other commands.
     ctx.obj['gpg'] = gpg
 
-    if key_id is not None:
+    # If a key has been defined
+    if (key_id is not None) and (key_file is None) and (private_key_file is None):
+
+        public_key_exist = None
         public_key_exist = gpg.list_keys(keys=key_id)
 
-        if public_key_exist.fingerprints:
+        # Check that it does not already exist in GPG.
+        if (public_key_exist is not None) and (len(public_key_exist.fingerprints) == 1):
             click.echo('The key: "' + key_id + '" already exists')
+            key_fingerprint = public_key_exist[0]['fingerprint']
         else:
-            if key_file is not None:
-                click.echo('Import of the key located in the file: "' + key_file + '"')
+            click.echo('Reception of the key: "' + key_id + '" on the "' + key_server + '" server...')
+            imported_key = gpg.recv_keys(key_server, key_id)
 
-                with open(key_file) as f:
-                    key_data = f.read()
-                imported_key = gpg.import_keys(key_data)
+            if (imported_key.count != 1) or len(imported_key.results != 1):
+                click.echo('Unable to import public key (' + key_id + ') from public server: ' + key_server
+                           + '. GPG Error: ' + imported_key.stderr, err=True)
+                exit(1)
+            else:
+                key_fingerprint = imported_key.results[0]['fingerprint']
 
-            elif (key_id is not None) and (key_file is None):
-                click.echo('Reception of the key: "' + key_id + '" on the "' + key_server + '" server...')
-                imported_key = gpg.recv_keys(key_server, key_id)
-                if imported_key.count is None:
-                    click.echo('Error. GPG')
-                    exit(2)
+    elif (key_id is None) and (key_file is not None) and (private_key_file is None):
 
-            click.echo('The key has been successfully imported. Fingerprint: ' + imported_key.fingerprints[0])
+        key_fingerprint = None
 
-        # export
-        ctx.obj['gpg_key_id'] = key_id
+        # If a file has been specified for the public key
+        click.echo('Import of the key located in the file: "' + key_file + '"')
+        # Read the content and import the key
+        with open(key_file) as f:
+            key_data = f.read()
 
-    # import private key
-    if private_key_file is not None:
+        try:
+            imported_key = gpg.import_keys(key_data)
+            key_fingerprint = imported_key.results[0]['fingerprint']
+        except:
+            click.echo('Unable to import public key. GPG Error: ' + imported_key.stderr, err=True)
+            exit(1)
+    elif (key_id is None) and (key_file is None) and (private_key_file is not None):
+        # import private key
         ctx.obj['gpg_private_use'] = True
         ctx.obj['gpg_private_key_pass'] = private_key_pass
         ctx.obj['gpg_private_key_file_remove'] = private_key_file_remove
@@ -174,26 +200,39 @@ def gpg(ctx, key_server, key_id, key_file, private_key_file, private_key_file_re
             click.echo('Import of the private key located in the file: "' + private_key_file + '"')
             with open(private_key_file) as f:
                 private_key_data = f.read()
-            imported_private_key = gpg.import_keys(private_key_data)
-            ctx.obj['gpg_private_key_fingerprints'] = imported_private_key.fingerprints[0]
-            if imported_private_key.count is None:
-                click.echo('Error. GPG')
-                exit(2)
+
+            # Try to import the private key
+            try:
+                imported_private_key = gpg.import_keys(private_key_data)
+                ctx.obj['gpg_private_key_fingerprints'] = imported_private_key.fingerprints[0]
+            except:
+                click.echo('Unable to import private key. GPG Error: ' + imported_private_key.stderr, err=True)
+                exit(1)
+            else:
+                click.echo('The private key has been successfully imported. Fingerprint: '
+                           + imported_private_key.fingerprints[0])
+    else:
+        click.echo('You must specify the GPG public --key-id or --key-file.', err=True)
+        exit(1)
+
+    # Share key_id for others commands
+    if key_fingerprint is not None:
+        ctx.obj['gpg_key_id'] = key_fingerprint
+        click.echo('The key has been successfully imported/defined. Fingerprint: ' + key_fingerprint)
 
 
 @cli.command()
-@click.option('--host', '-h', required=True)
-@click.option('--user', '-u', type=str, required=True)
-@click.option('--passwd', '-p', type=str, required=True)
-@click.option('--timeout', '-t', type=int, default=5, required=True)
-@click.option('--mode', '-m', type=str, default='ftps', required=True)
-@click.option('--remove-local', '-rml', type=bool, default=False, required=True)
+@click.option('--host', '-h', type=str, required=True, help='FTP(s) server address.')
+@click.option('--user', '-u', type=str, required=True, help='Username for FTP(s).')
+@click.option('--passwd', '-p', type=str, required=True, help='Password for FTP(s).')
+@click.option('--timeout', '-t', type=int, default=5, required=True, help='Timeout for FTP(s).', show_default=True)
+@click.option('--mode', '-m', type=str, default='ftps', required=True, show_default=True, help='Transfer mode, "ftps" '
+                                                                                               'or "ftp".')
+@click.option('--remove-local', '-rml', type=bool, default=False, required=True, show_default=True, help='Delete '
+                                                                                                         'files after'
+                                                                                                         ' transfer.')
 @click.pass_context
 def transfer(ctx, host, user, passwd, timeout, mode, remove_local):
-    #if not ctx.obj['backup_use']:
-    #   click.echo('To use this command, the "backup" command is required.', err=True)
-    #   exit(2)
-
     ctx.obj['transfer_use'] = True
 
     if mode == 'ftps':
@@ -210,69 +249,57 @@ def transfer(ctx, host, user, passwd, timeout, mode, remove_local):
     ctx.obj['transfer_remove_local'] = remove_local
 
 
-def check_old_backup(file, days):
-    # clean name
-    filename_clean = os.path.basename(file.replace('.tar.gz', '').replace('.encrypted', '').replace('SQL_BACKUP_', '').
-                                      replace('WP_BACKUP_', ''))
-    date_format = '%Y-%m-%d-%H-%M-%S'
-    date_now = datetime.datetime.now().strftime(date_format)
-    a = datetime.datetime.strptime(filename_clean, date_format)
-    b = datetime.datetime.strptime(date_now, date_format)
-    delta = b - a
-
-    if delta.days >= days:
-        return True
-    else:
-        return False
-
-
 @cli.command()
-@click.option('--wp', '-w', type=bool, default=True, required=True)
-@click.option('--sql', '-s', type=bool, default=True, required=True)
-@click.option('--wp-dir', '-wd', type=click.Path(exists=True, readable=True, dir_okay=True), default='', required=True)
-@click.option('--archive-dir', '-ad', type=click.Path(exists=True, writable=True, dir_okay=True), default='',
-              required=True)
+@click.option('--wp', '-w', type=bool, default=True, required=True, help='Activate WordPress backup.',
+              show_default=True)
+@click.option('--sql', '-s', type=bool, default=True, required=True,
+              help='Activate the backup of the WordPress database.', show_default=True)
+@click.option('--wp-dir', '-wd', type=click.Path(exists=True, readable=True, dir_okay=True),
+              help='WordPress path (used for website backup and WordPress database).', required=True)
+@click.option('--archive-dir', '-ad', type=click.Path(exists=True, writable=True, dir_okay=True),
+              help='Local path where backups are stored.', required=True)
 @click.pass_context
 def backup(ctx, wp, sql, wp_dir, archive_dir):
     ctx.obj['backup_use'] = True
 
+    # Check if the mandatory arguments are valid.
     if (wp is False) and (sql is False):
         click.echo('Please know at least one command for backup: "--wp" or "--sql" to use the backup command.')
 
     click.echo('Backup archive directory: ' + archive_dir)
-    click.echo('Backup verification greater than ' + str(ctx.obj['archive-retention']) + ' day(s)')
+    click.echo('Backup verification greater than ' + str(ctx.obj['archive_retention']) + ' day(s)')
 
     files = []
     if ctx.obj['transfer_use']:
+        # If the "transfer" command is used check the retention on the FTP(s).
         ftp = ftp_connect(ctx.obj['transfer_host'], ctx.obj['transfer_user'], ctx.obj['transfer_passwd'],
                           ctx.obj['transfer_timeout'], ctx.obj['transfer_ftps'], close_immediately=False)
-        files = []
-
         try:
             files = ftp.nlst()
         except ftplib.error_perm as resp:
-            click.echo('Files not found', err=True)
-            exit(2)
+            click.echo('Unable to access FTP file (s) to verify retention.', err=True)
+        else:
+            for f in files:
+                if f.endswith('.tar.gz'):
+                    old_or_not = check_old_backup(f, ctx.obj['archive_retention'])
+                    if old_or_not:
+                        ftp.delete(f)
+                        click.echo('Remote backup deleted: "' + f + '"')
 
-        for f in files:
-            if f.endswith('.tar.gz'):
-                old_or_not = check_old_backup(f, ctx.obj['archive-retention'])
-                if old_or_not:
-                    ftp.delete(f)
-                    click.echo('Remote backup deleted: "' + f + '"')
-
+    # Check the retention in the local folder.
     for file in os.listdir(archive_dir):
         if file.endswith(".tar.gz"):
-            old_or_not = check_old_backup(file, ctx.obj['archive-retention'])
+            old_or_not = check_old_backup(file, ctx.obj['archive_retention'])
             if old_or_not:
                 os.remove(os.path.join(archive_dir, file))
                 click.echo('Local backup deleted: "' + file + '"')
 
     if wp:
+        # Launch of WordPress site backup
         click.echo('WordPress backup launch...')
         click.echo('Installation directory: ' + wp_dir)
 
-        # define file name
+        # Define the file name, with: extensions, date, encrypted name.
         WP_FILENAME_PREFIX = "WP_BACKUP_"
         WP_FILENAME = WP_FILENAME_PREFIX + str(datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
         WP_UNCRYPTED_FILENAME = WP_FILENAME
@@ -281,6 +308,7 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
         WP_UNCRYPTED_PATH_FILENAME = os.path.join(archive_dir, WP_UNCRYPTED_FILENAME_EXT)
         WP_CRYPTED_PATH_FILENAME = os.path.join(archive_dir, WP_CRYPTED_FILENAME_EXT)
 
+        # If gpg is used encrypted file names
         if ctx.obj['gpg_use']:
             wp_backup_filename = WP_CRYPTED_FILENAME_EXT
             wp_backup_file_path = WP_CRYPTED_PATH_FILENAME
@@ -288,16 +316,16 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
             wp_backup_filename = WP_UNCRYPTED_FILENAME_EXT
             wp_backup_file_path = WP_UNCRYPTED_PATH_FILENAME
 
-        # gzip
+        # Compress the archive (tar.gz)
         wp_backup_file = tar([wp_dir], WP_UNCRYPTED_PATH_FILENAME)
 
-        # encrypt
+        # If gpg used, encrypt the archive.
         if ctx.obj['gpg_use']:
             encrypt_with_gpg(ctx.obj['gpg'], wp_backup_file, key=ctx.obj['gpg_key_id'],
                              remove_file=True,
                              output_path=WP_CRYPTED_PATH_FILENAME)
 
-        # transfer
+        # If "transfer" is used, transfer the archive to FTP(s)
         if ctx.obj['transfer_use']:
             ftp = ftp_connect(ctx.obj['transfer_host'], ctx.obj['transfer_user'], ctx.obj['transfer_passwd'],
                               ctx.obj['transfer_timeout'], ctx.obj['transfer_ftps'], close_immediately=False)
@@ -305,8 +333,10 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
                               remove_local_file=ctx.obj['transfer_remove_local'], close=True)
 
     if sql:
-        click.echo('SQL backup launch...')
-        # define file name
+        # Launch of database backup
+        click.echo('Database backup launch...')
+
+        # Define the file name, with: extensions, date, encrypted name.
         SQL_FILENAME_PREFIX = "SQL_BACKUP_"
         SQL_FILENAME = SQL_FILENAME_PREFIX + str(datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
         SQL_UNCRYPTED_FILENAME = SQL_FILENAME
@@ -316,6 +346,7 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
         SQL_UNCRYPTED_PATH_FILENAME = os.path.join(archive_dir, SQL_UNCRYPTED_FILENAME_EXT)
         SQL_CRYPTED_PATH_FILENAME = os.path.join(archive_dir, SQL_CRYPTED_FILENAME_EXT)
 
+        # If gpg is used encrypted file names
         if ctx.obj['gpg_use']:
             sql_backup_filename = SQL_CRYPTED_FILENAME_EXT
             sql_backup_file_path = SQL_CRYPTED_PATH_FILENAME
@@ -323,7 +354,7 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
             sql_backup_filename = SQL_UNCRYPTED_FILENAME_EXT
             sql_backup_file_path = SQL_UNCRYPTED_PATH_FILENAME
 
-        # get wp-config params
+        # Retrieve information from the database in "wp-config.php"
         wp_config = WpConfigFile(os.path.join(wp_dir, 'wp-config.php'))
         wp_db_host_port = parse_hostport(wp_config.get('DB_HOST'))
         wp_db_host = wp_db_host_port[0]
@@ -333,22 +364,23 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
         else:
             wp_db_port = wp_db_host_port[1]
 
+        # Dump the database
         sql_backup(hostname=wp_db_host, port=wp_db_port, mysql_user=wp_config.get('DB_USER'),
                    mysql_pw=wp_config.get('DB_PASSWORD'), database=wp_config.get('DB_NAME'), out_file=SQL_PATH_FILENAME)
 
-        # gzip
+        # Compress the archive (tar.gz)
         sql_backup_file = tar([SQL_PATH_FILENAME], SQL_UNCRYPTED_PATH_FILENAME, accname=SQL_UNCRYPTED_FILENAME + '.sql')
 
-        # delete not compressed file
+        # Delete the uncompressed file.
         remove(SQL_PATH_FILENAME)
 
-        # encrypt
+        # If gpg used, encrypt the archive.
         if ctx.obj['gpg_use']:
             encrypt_with_gpg(ctx.obj['gpg'], sql_backup_file, key=ctx.obj['gpg_key_id'],
                              remove_file=True,
                              output_path=SQL_CRYPTED_PATH_FILENAME)
 
-        # transfer
+        # If "transfer" is used, transfer the archive to FTP(s)
         if ctx.obj['transfer_use']:
             ftp = ftp_connect(ctx.obj['transfer_host'], ctx.obj['transfer_user'], ctx.obj['transfer_passwd'],
                               ctx.obj['transfer_timeout'], ctx.obj['transfer_ftps'], close_immediately=False)
@@ -365,68 +397,76 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
 def restore(ctx, wp_archive, sql_archive, wp_dir, sql_database):
     ctx.obj['restore_use'] = True
 
+    # check that one of the options is specified
     if (wp_archive is None) and (sql_archive is None):
         click.echo(
-            'Please know at least one command for backup: "--wp-archive" or "--sql-archive" to use the restore command.', err=True)
+            'Please know at least one command for backup: "--wp-archive" or "--sql-archive" to use the restore command.'
+            , err=True)
+        exit(1)
 
-    if (sql_archive is not None) and (wp_dir is None):
-        click.echo('To use SQL restore please specify the option "--wp-dir"', err=True)
+    # '--wp-dir' must be specified
+    if (sql_archive is not None or wp_archive is not None) and (wp_dir is None):
+        click.echo('To use restore please specify the option "--wp-dir"', err=True)
+        exit(1)
 
-    if ctx.obj['transfer_use']:
-        # get file in ftps
-        pass
+    if (ctx.obj['gpg_use']) and (ctx.obj['gpg_private_use'] is not False):
+        click.echo('To use gpg with "restore", please specify a private key', err=True)
+        exit(1)
 
     if wp_archive is not None:
-        if ctx.obj['transfer_use']:
-            # future implementation
-            pass
-        else:
-            # decrypt
-            if ctx.obj['gpg_use']:
-                stream = open(wp_archive, "rb")
+        # if gpg is used
+        if ctx.obj['gpg_use'] and ctx.obj['gpg_private_use']:
+            # open archive
+            stream = open(wp_archive, "rb")
 
-                try:
-                    tmp_file = tempfile.NamedTemporaryFile(delete=True, suffix=".tar.gz")
-                except:
-                    click.echo('Unable to create temporary file', err=True)
-                    exit(2)
-                else:
-                    click.echo('Temporary file created: "' + tmp_file.name + '"')
-
-                click.echo('Attempting to decrypt the file: ' + wp_archive)
-
-                try:
-                    ctx.obj['gpg'].decrypt_file(stream, passphrase=ctx.obj['gpg_private_key_pass'],
-                                                output=tmp_file.name)
-                    tar_decompress(tmp_file.name, wp_dir)
-                except:
-                    click.echo('Unable to decrypt the file', err=True)
-                    exit(2)
-                else:
-                    click.echo('File successfully decrypted: ' + wp_archive)
-                finally:
-                    tmp_file.close()
-                    stream.close()
-
-                if ctx.obj['gpg_private_key_file_remove']:
-                    ctx.obj['gpg'].delete_keys(ctx.obj['gpg_private_key_fingerprints'], secret=True,
-                                               passphrase=ctx.obj['gpg_private_key_pass'])
-                    click.echo('Removed GPG private key: ' + ctx.obj['gpg_private_key_fingerprints'])
+            # create temporary file
+            try:
+                tmp_file = tempfile.NamedTemporaryFile(delete=True, suffix=".tar.gz")
+            except:
+                click.echo('Unable to create temporary file', err=True)
+                exit(1)
             else:
-                tar_decompress(wp_archive, wp_dir)
+                click.echo('Temporary file created: "' + tmp_file.name + '"')
+
+            click.echo('Attempting to decrypt the file: ' + wp_archive)
+
+            # decrypt the archive
+            try:
+                ctx.obj['gpg'].decrypt_file(stream, passphrase=ctx.obj['gpg_private_key_pass'],
+                                            output=tmp_file.name)
+                tar_decompress(tmp_file.name, wp_dir)
+            except:
+                click.echo('Unable to decrypt the file', err=True)
+                exit(1)
+            else:
+                click.echo('File successfully decrypted: ' + wp_archive)
+            finally:
+                tmp_file.close()
+                stream.close()
+
+            # Delete the private key from the secure "gpg" keychain if requested.
+            if ctx.obj['gpg_private_key_file_remove']:
+                ctx.obj['gpg'].delete_keys(ctx.obj['gpg_private_key_fingerprints'], secret=True,
+                                           passphrase=ctx.obj['gpg_private_key_pass'])
+                click.echo('Removed GPG private key: ' + ctx.obj['gpg_private_key_fingerprints'])
+        else:
+            # Extract files from the archive
+            tar_decompress(wp_archive, wp_dir)
 
         click.echo('WordPress archive restored to location: "' + wp_dir + '"')
 
     if sql_archive is not None:
-
+        # if gpg is used
         if ctx.obj['gpg_use']:
+            # open archive
             sql_stream = open(sql_archive, "rb")
 
+            # create temporary file
             try:
                 sql_compress_tmp_file = tempfile.NamedTemporaryFile(delete=True, suffix=".tar.gz")
             except:
                 click.echo('Unable to create temporary file', err=True)
-                exit(2)
+                exit(1)
             else:
                 click.echo('Temporary file created: "' + sql_compress_tmp_file.name + '"')
 
@@ -435,40 +475,45 @@ def restore(ctx, wp_archive, sql_archive, wp_dir, sql_database):
             try:
                 ctx.obj['gpg'].decrypt_file(sql_stream, passphrase=ctx.obj['gpg_private_key_pass'],
                                             output=sql_compress_tmp_file.name)
-
+                # Define the directory where the .SQL file is located
                 sql_compress_path_file = sql_compress_tmp_file.name
             except:
                 click.echo('Unable to decrypt the file', err=True)
-                exit(2)
+                exit(1)
             else:
                 click.echo('File successfully decrypted: ' + sql_archive)
             finally:
                 sql_stream.close()
 
+            # Delete the private key from the secure "gpg" keychain if requested.
             if ctx.obj['gpg_private_key_file_remove']:
                 ctx.obj['gpg'].delete_keys(ctx.obj['gpg_private_key_fingerprints'], secret=True,
                                            passphrase=ctx.obj['gpg_private_key_pass'])
                 click.echo('Removed GPG private key: ' + ctx.obj['gpg_private_key_fingerprints'])
         else:
+            # Define the directory where the .SQL file is located
             sql_compress_path_file = sql_archive
 
+        # Create a temporary folder that will contain the SQL file.
         try:
             sql_tmp_dir_file = tempfile.TemporaryDirectory()
         except:
             click.echo('Unable to create temporary directory', err=True)
-            exit(2)
+            exit(1)
         else:
             click.echo('Temporary directory created: "' + sql_tmp_dir_file.name + '"')
 
         sql_tmp_file = os.path.basename(sql_archive.replace('.encrypted.tar.gz', ''))
         sql_file = os.path.join(sql_tmp_dir_file.name, sql_tmp_file) + '.sql'
 
+        # Extract the .SQL file from the archive to the temporary folder
         tar_decompress(sql_compress_path_file, sql_tmp_dir_file.name)
 
         if ctx.obj['gpg_use']:
+            # If "gpg" is used, close the encrypted archive once extracted
             sql_compress_tmp_file.close()
 
-        # get wp-config params
+        # Retrieve information from the database in "wp-config.php"
         wp_config = WpConfigFile(os.path.join(wp_dir, 'wp-config.php'))
 
         wp_db_host_port = parse_hostport(wp_config.get('DB_HOST'))
@@ -484,13 +529,16 @@ def restore(ctx, wp_archive, sql_archive, wp_dir, sql_database):
         else:
             wp_db_name = sql_database
 
+        # Restore the database to the defined database
         sql_restore(hostname=wp_db_host, port=wp_db_port, mysql_user=wp_config.get('DB_USER'),
                     mysql_pw=wp_config.get('DB_PASSWORD'), database=wp_db_name, file=sql_file)
 
+        # Delete the archive
         remove(sql_tmp_dir_file.name)
 
 
 def tar(src, out, mode='x:gz', accname=None):
+    """ Create a 'tar.gz' archive """
     click.echo('Creating the compressed file...')
     try:
         tar = tarfile.open(out, mode)
@@ -507,13 +555,14 @@ def tar(src, out, mode='x:gz', accname=None):
 
 
 def tar_decompress(file, to):
+    """ Extract files from a 'tar.gz' archive """
     try:
         click.echo('Decompressing the archive: "' + file + '"')
         tf = tarfile.open(file)
         tf.extractall(path=to)
     except:
         click.echo('Unable to decompress the archive', err=True)
-        exit(2)
+        exit(1)
     else:
         click.echo('File decompression performed: "' + file + '"')
     finally:
@@ -521,6 +570,7 @@ def tar_decompress(file, to):
 
 
 def encrypt_with_gpg(gpg, path, key, remove_file=False, output_path=None):
+    """ Encrypted file using gpg """
     uncrypted = open(path, "rb")
 
     if output_path is not None:
@@ -536,16 +586,14 @@ def encrypt_with_gpg(gpg, path, key, remove_file=False, output_path=None):
         click.echo('The encrypted file is available at the location: "' + output_path + '"')
     else:
         click.echo('Error during encryption: ' + encrypted.status, err=True)
-        exit(2)
+        exit(1)
 
     if remove_file:
         remove(path)
 
 
 def remove(path):
-    """
-    Remove the file or directory
-    """
+    """ Remove the file or directory """
     if os.path.isdir(path):
         try:
             os.rmdir(path)
@@ -564,6 +612,7 @@ def remove(path):
 
 
 def ftp_connect(host, user, passwd, timeout=5, ftps=True, close_immediately=False):
+    """ Connect to an FTP(s) """
     if ftps:
         try:
             ftps = fixFTP_TLS(host=host, timeout=timeout)
@@ -597,7 +646,7 @@ def ftp_connect(host, user, passwd, timeout=5, ftps=True, close_immediately=Fals
 
 
 def ftp_transfer_file(ftp, filename, file_path, remove_local_file=False, close=True):
-    # TODO: Try
+    """ Upload a file to the FTP(s) server """
     ftp.storbinary('STOR ' + filename, open(file_path, 'rb'))
     if remove_local_file:
         remove(file_path)
@@ -606,7 +655,7 @@ def ftp_transfer_file(ftp, filename, file_path, remove_local_file=False, close=T
 
 
 def sql_backup(hostname, port, mysql_user, mysql_pw, database, out_file):
-
+    """ Dump a database """
     try:
         p = subprocess.Popen(
             'mysqldump -u ' + mysql_user + ' --password=' + mysql_pw + ' -h ' + hostname + ' -P ' + port + ' -e --opt '
@@ -623,7 +672,25 @@ def sql_backup(hostname, port, mysql_user, mysql_pw, database, out_file):
         exit(2)
 
 
+def check_old_backup(file, days):
+    """ Check if the file is older than "x" days """
+    # Delete unwanted items to recover the date from the file
+    filename_clean = os.path.basename(file.replace('.tar.gz', '').replace('.encrypted', '').replace('SQL_BACKUP_', '').
+                                      replace('WP_BACKUP_', ''))
+    date_format = '%Y-%m-%d-%H-%M-%S'
+    date_now = datetime.datetime.now().strftime(date_format)
+    a = datetime.datetime.strptime(filename_clean, date_format)
+    b = datetime.datetime.strptime(date_now, date_format)
+    delta = b - a
+
+    if delta.days >= days:
+        return True
+    else:
+        return False
+
+
 def sql_restore(hostname, port, mysql_user, mysql_pw, database, file):
+    """ Restore a database """
     try:
         p = subprocess.Popen(
             'mysql -u ' + mysql_user + ' --password=' + mysql_pw + ' -h ' + hostname + ' -P ' + port + ' ' + database + ' < ' + file,
@@ -640,6 +707,7 @@ def sql_restore(hostname, port, mysql_user, mysql_pw, database, file):
 
 
 def parse_hostport(hp):
+    """ Separate address and port """
     regex = re.compile(r'''
     (                            # first capture group = Addr
       \[                         # literal open bracket                       IPv6
