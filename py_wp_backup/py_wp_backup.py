@@ -30,29 +30,6 @@ import gnupg as gnupg_
 from wpconfigr import WpConfigFile
 
 
-# Class allowing to have several requirements in the "click" options.
-class Mutex(click.Option):
-    def __init__(self, *args, **kwargs):
-        self.not_required_if = kwargs.pop("not_required_if")
-
-        assert self.not_required_if, "'not_required_if' parameter required"
-        kwargs["help"] = (kwargs.get("help", "") + "Option is mutually exclusive with " + ", ".join(
-            self.not_required_if) + ".").strip()
-        super(Mutex, self).__init__(*args, **kwargs)
-
-    def handle_parse_result(self, ctx, opts, args):
-        current_opt = self.name in opts
-        for mutex_opt in self.not_required_if:
-            if mutex_opt in opts:
-                if current_opt:
-                    raise click.BadOptionUsage(str(self.name),
-                                               "Illegal usage: '" + str(
-                                                   self.name) + "' is mutually exclusive with '" + str(mutex_opt) + "'")
-                else:
-                    self.prompt = None
-        return super(Mutex, self).handle_parse_result(ctx, opts, args)
-
-
 # Used by fixFTP_TLS
 class ReusedSslSocket(ssl.SSLSocket):
     def unwrap(self):
@@ -613,7 +590,7 @@ def ftp_connect(host, user, passwd, timeout=5, ftps=True, close_immediately=Fals
             ftps_or_ftp = 'FTPs'
     else:
         try:
-            ftp = ftplib.FTP_TLS(host=host, timeout=timeout)
+            ftp = ftplib.FTP(host=host, timeout=timeout)
             ftp.login(user=user, passwd=passwd)
         except ConnectionRefusedError as e:
             click.echo(e.strerror + '. IP: ' + host, err=True)
