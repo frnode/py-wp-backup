@@ -116,8 +116,8 @@ def gpg(ctx, key_server, key_id, key_file, private_key_file, private_key_file_re
     # Export of GPG to be able to use it in other commands.
     ctx.obj['gpg'] = gpg
 
-    if (key_id and key_file is None) and (private_key_pass is None):
-        private_key_pass = click.prompt("private-key-pass", default=None, hide_input=True)
+    if (key_id is None) and (key_file is None) and (private_key_pass is None):
+        private_key_pass = click.prompt("Private key pass", default=None, hide_input=True)
 
     # If a key has been defined
     if (key_id is not None) and (key_file is None) and (private_key_file is None):
