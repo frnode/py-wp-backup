@@ -93,7 +93,7 @@ def cli(ctx, archive_retention):
 @click.option('--private-key-file', '-pkf', type=click.Path(exists=True, readable=True, file_okay=True),
               default=None, help='When restoring if your backup is encrypted, this option must be specified in order '
                                  'to decrypt the backup. This option retrieves the private key and imports it.')
-@click.option('--private-key-pass', '-pkp', required=False, hide_input=True, help='Secret phrase to import the private '
+@click.option('--private-key-pass', '-pkp', default=None, required=False, help='Secret phrase to import the private '
                                                                                   'key. For security reasons, '
                                                                                   'it is recommended not to define it, '
                                                                                   'it will be requested in a secure '
@@ -115,6 +115,9 @@ def gpg(ctx, key_server, key_id, key_file, private_key_file, private_key_file_re
 
     # Export of GPG to be able to use it in other commands.
     ctx.obj['gpg'] = gpg
+
+    if (key_id and key_file is None) and (private_key_pass is None):
+        private_key_pass = click.prompt("private-key-pass", default=None, hide_input=True)
 
     # If a key has been defined
     if (key_id is not None) and (key_file is None) and (private_key_file is None):
@@ -280,7 +283,7 @@ def backup(ctx, wp, sql, wp_dir, archive_dir):
             wp_backup_file_path = WP_UNCRYPTED_PATH_FILENAME
 
         # Compress the archive (tar.gz)
-        wp_backup_file = tar([wp_dir], WP_UNCRYPTED_PATH_FILENAME)
+        wp_backup_file = tar([wp_dir], WP_UNCRYPTED_PATH_FILENAME, accname="")
 
         # If gpg used, encrypt the archive.
         if ctx.obj['gpg_use']:
@@ -372,7 +375,7 @@ def restore(ctx, wp_archive, sql_archive, wp_dir, sql_database):
         click.echo('To use restore please specify the option "--wp-dir"', err=True)
         exit(1)
 
-    if (ctx.obj['gpg_use']) and (ctx.obj['gpg_private_use'] is not False):
+    if (ctx.obj['gpg_use']) and (ctx.obj['gpg_private_use'] is False):
         click.echo('To use gpg with "restore", please specify a private key', err=True)
         exit(1)
 
@@ -406,12 +409,6 @@ def restore(ctx, wp_archive, sql_archive, wp_dir, sql_database):
             finally:
                 tmp_file.close()
                 stream.close()
-
-            # Delete the private key from the secure "gpg" keychain if requested.
-            if ctx.obj['gpg_private_key_file_remove']:
-                ctx.obj['gpg'].delete_keys(ctx.obj['gpg_private_key_fingerprints'], secret=True,
-                                           passphrase=ctx.obj['gpg_private_key_pass'])
-                click.echo('Removed GPG private key: ' + ctx.obj['gpg_private_key_fingerprints'])
         else:
             # Extract files from the archive
             tar_decompress(wp_archive, wp_dir)
@@ -447,12 +444,6 @@ def restore(ctx, wp_archive, sql_archive, wp_dir, sql_database):
                 click.echo('File successfully decrypted: ' + sql_archive)
             finally:
                 sql_stream.close()
-
-            # Delete the private key from the secure "gpg" keychain if requested.
-            if ctx.obj['gpg_private_key_file_remove']:
-                ctx.obj['gpg'].delete_keys(ctx.obj['gpg_private_key_fingerprints'], secret=True,
-                                           passphrase=ctx.obj['gpg_private_key_pass'])
-                click.echo('Removed GPG private key: ' + ctx.obj['gpg_private_key_fingerprints'])
         else:
             # Define the directory where the .SQL file is located
             sql_compress_path_file = sql_archive
@@ -495,6 +486,12 @@ def restore(ctx, wp_archive, sql_archive, wp_dir, sql_database):
         # Restore the database to the defined database
         sql_restore(hostname=wp_db_host, port=wp_db_port, mysql_user=wp_config.get('DB_USER'),
                     mysql_pw=wp_config.get('DB_PASSWORD'), database=wp_db_name, file=sql_file)
+
+        # Delete the private key from the secure "gpg" keychain if requested.
+        if ctx.obj['gpg_private_key_file_remove']:
+            ctx.obj['gpg'].delete_keys(ctx.obj['gpg_private_key_fingerprints'], secret=True,
+                                       passphrase=ctx.obj['gpg_private_key_pass'])
+            click.echo('Removed GPG private key: ' + ctx.obj['gpg_private_key_fingerprints'])
 
         # Delete the archive
         remove(sql_tmp_dir_file.name)
